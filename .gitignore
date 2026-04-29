@@ -33,7 +33,7 @@ backup/
 
 # 模型文件
 models/
-CosyVoice/
+# CosyVoice/  # 保留CosyVoice代码
 
 # IDE
 .vscode/
