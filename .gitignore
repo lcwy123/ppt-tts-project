@@ -35,6 +35,16 @@ backup/
 models/
 # CosyVoice/  # 保留CosyVoice代码
 
+# 离线依赖包
+packages/
+
+# 本地数据目录
+data/
+
+# 虚拟环境
+venv/
+env_py310_cuda126/
+
 # IDE
 .vscode/
 .idea/
