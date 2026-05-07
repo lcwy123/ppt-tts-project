@@ -94,7 +94,7 @@ def download_onnxruntime_gpu():
     cmd = [
         sys.executable, "-m", "pip", "download",
         "onnxruntime-gpu==1.18.0",
-        "--index-url", "https://aiinfra.pkgs.visualging.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/",
+        "--index-url", "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/",
         "-d", str(PACKAGES_DIR),
         "--ignore-requires-python",
     ]
