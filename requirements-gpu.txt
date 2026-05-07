@@ -13,10 +13,13 @@ torch==2.4.0
 torchaudio==2.4.0
 
 # ============================================================
-# 第二部分：ONNX Runtime GPU (CUDA 12.6)
+# 第二部分：ONNX Runtime GPU
+# 注意: Microsoft Visual Studio Feed 已需要认证
+# 如果 onnxruntime-gpu 安装失败，可尝试:
+# 1. 单独下载 whl: https://github.com/microsoft/onnxruntime/releases
+# 2. 或使用 CPU 版本: pip install onnxruntime
 # ============================================================
---extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
-onnxruntime-gpu==1.18.0
+onnxruntime-gpu>=1.16.0
 
 # ============================================================
 # 第三部分：CosyVoice 核心依赖

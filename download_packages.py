@@ -86,22 +86,30 @@ def download_torch_standalone():
         print(f"[WARNING] PyTorch 下载失败: {e}")
 
 def download_onnxruntime_gpu():
-    """单独下载 ONNX Runtime GPU"""
+    """单独下载 ONNX Runtime GPU
+    
+    注意: Microsoft Visual Studio Feed 已需要认证
+    如果下载失败，请手动从 GitHub 下载 whl 文件:
+    https://github.com/microsoft/onnxruntime/releases
+    """
     print(f"\n{'='*60}")
     print(f"📦 正在下载: ONNX Runtime GPU")
     print(f"{'='*60}")
+    print("⚠️ 注意: 如果下载失败，请从 GitHub 手动下载")
+    print("   https://github.com/microsoft/onnxruntime/releases")
+    print()
     
+    # 尝试从 PyPI 下载
     cmd = [
         sys.executable, "-m", "pip", "download",
-        "onnxruntime-gpu==1.18.0",
-        "--index-url", "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/",
+        "onnxruntime-gpu>=1.16.0",
         "-d", str(PACKAGES_DIR),
         "--ignore-requires-python",
     ]
     
     try:
         subprocess.run(cmd, capture_output=True, text=True)
-        print("✅ ONNX Runtime GPU 下载完成")
+        print("✅ ONNX Runtime GPU 下载完成（如果失败请手动下载）")
     except Exception as e:
         print(f"[WARNING] ONNX Runtime GPU 下载失败: {e}")
 
