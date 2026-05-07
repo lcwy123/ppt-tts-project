@@ -1,0 +1,15 @@
+# ============================================================
+# CosyVoice 最小依赖 - 仅核心推理
+# 如果只做 TTS 推理，安装这个
+# ============================================================
+
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.4.0
+torchaudio==2.4.0
+
+numpy>=1.24.0,<2.0
+scipy>=1.11.0
+soundfile>=0.12.0
+transformers>=4.40.0
+modelScope>=1.20.0
+omegaconf>=2.3.0

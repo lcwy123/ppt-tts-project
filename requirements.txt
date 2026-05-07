@@ -1,18 +1,29 @@
-# Core dependencies
+# ============================================================
+# PPT-TTS-Project 依赖清单
+# ============================================================
+# 此文件为索引入口，实际依赖已拆分为：
+#
+#   requirements-cpu.txt    - CPU 版本（不含 TTS）
+#   requirements-gpu.txt    - GPU 版本（含 CosyVoice）
+#   requirements-cosyvoice-minimal.txt - CosyVoice 最小依赖
+#
+# 安装方式：
+#   联网环境: pip install -r requirements-gpu.txt
+#   离线环境: pip install --no-index --find-links=packages/ -r requirements-gpu.txt
+#
+# ============================================================
+
+# 基础依赖（PPT/Word/工具）
 python-pptx>=0.6.21
 python-docx>=1.1.0
 mutagen>=1.47.0
 python-dotenv>=1.0.0
-openai>=1.0.0
 requests>=2.31.0
-
-# CosyVoice dependencies
-torch>=2.0.0
-torchaudio>=2.0.0
-numpy>=1.24.0
-
-# Gradio WebUI
+openai>=1.0.0
 gradio>=4.0.0
 
-# CosyVoice
--e ./CosyVoice
+# 注意: CosyVoice 需要单独安装
+# 如需使用本地TTS，运行:
+#   pip install -r requirements-gpu.txt
+# 或:
+#   pip install --no-index --find-links=packages/ -r requirements-gpu.txt

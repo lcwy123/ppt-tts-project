@@ -34,19 +34,67 @@ ppt-tts-project/
 │   └── app.py
 ├── models/                  # 模型文件
 │   └── CosyVoice-300M-SFT/ # CosyVoice预训练模型
+├── packages/                # 离线依赖包（需下载）
 ├── main.py                  # 主程序入口
-└── requirements.txt         # 依赖
+├── requirements-cpu.txt     # CPU版本依赖
+├── requirements-gpu.txt     # GPU版本依赖
+└── requirements-cosyvoice-minimal.txt  # CosyVoice最小依赖
 ```
 
 ## 快速开始
 
-### 1. 安装依赖
+### 方式一：联网安装（推荐用于开发）
 
 ```bash
-pip install -r requirements.txt
+# 基础依赖
+pip install -r requirements-cpu.txt
+
+# GPU支持 + CosyVoice
+pip install -r requirements-gpu.txt
+
+# 或安装完整CosyVoice依赖
+pip install -r CosyVoice/requirements.txt
 ```
 
-### 2. 配置
+### 方式二：离线部署（生产环境）
+
+#### 第一步：在联网环境下载依赖
+
+```bash
+python download_packages.py
+```
+
+这会将所有依赖下载到 `packages/` 目录。
+
+#### 第二步：复制到离线服务器
+
+```bash
+# 将整个项目复制到离线服务器
+scp -r ppt-tts-project user@server:/path/to/
+
+# 或只复制必要文件
+rsync -av --include='packages/' --include='src/' --include='CosyVoice/' \
+      --include='models/' --include='main.py' --include='app.py' \
+      --include='requirements-*.txt' --exclude='*' \
+      ppt-tts-project/ user@server:/path/to/ppt-tts-project/
+```
+
+#### 第三步：在离线服务器安装
+
+```bash
+cd ppt-tts-project
+
+# 激活虚拟环境（假设服务器已配置 env_py310_cuda126）
+source /path/to/env_py310_cuda126/bin/activate
+
+# 安装离线依赖
+pip install --no-index --find-links=packages/ -r requirements-gpu.txt
+
+# 验证安装
+python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
+```
+
+## 配置
 
 编辑 `.env` 文件：
 
@@ -63,13 +111,22 @@ LOCAL_LLM_API_KEY=token-xxx
 TTS_MODE=cosyvoice
 ```
 
-### 3. 下载模型
+## 下载模型
+
+模型文件较大，需要单独下载：
 
 ```bash
 python download_model.py
 ```
 
-### 4. 运行
+或手动下载：
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| CosyVoice-300M-SFT | ~3GB | 基础语音模型 |
+| Qwen3.5-9B | ~18GB | LLM（可选，火山方舟API无需下载） |
+
+## 运行
 
 **命令行模式：**
 ```bash
@@ -100,10 +157,10 @@ python main.py
 # 或分步骤执行
 cd src
 python outline_generator.py   # 文字→提纲
-python ppt_generator.py        # 提纲→PPT
-python slides_extractor.py     # 提取文本
-python narration_generator.py  # 生成解说词
-python audio_generator.py     # 生成音频
+python ppt_generator.py      # 提纲→PPT
+python slides_extractor.py   # 提取文本
+python narration_generator.py # 生成解说词
+python audio_generator.py    # 生成音频
 python audio_embedder.py     # 嵌入PPT
 ```
 
@@ -134,6 +191,24 @@ data/
 ├── audio/                     # 生成的音频文件
 └── backup/                    # 历史备份
 ```
+
+## 离线部署服务器环境
+
+- **操作系统**: 银河麒麟 Linux Advanced Server V10
+- **Python**: 3.10.20
+- **CUDA**: 12.6
+- **虚拟环境**: env_py310_cuda126
+
+## 常见问题
+
+### Q: 离线环境下 torch 导入失败？
+A: 确保使用 `--find-links=packages/` 参数安装，指定离线包目录。
+
+### Q: 缺少某个 .whl 文件？
+A: 在联网环境运行 `pip download <package-name> -d packages/` 补充下载。
+
+### Q: GPU 未被识别？
+A: 检查 CUDA 环境：`python -c "import torch; print(torch.cuda.is_available())"`
 
 ## License
 
