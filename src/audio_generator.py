@@ -58,9 +58,11 @@ def generate_audio_cosyvoice(text, output_path, progress_callback=None):
     
     try:
         import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent / "CosyVoice"))
+        cosyvoice_root = str(Path(__file__).parent.parent / "CosyVoice")
+        matcha_root = cosyvoice_root + "/third_party/Matcha-TTS"
+        sys.path.insert(0, matcha_root)
+        sys.path.insert(0, cosyvoice_root)
         from cosyvoice.cli.cosyvoice import CosyVoice
-        import torchaudio
         
         if progress_callback:
             progress_callback(f"加载CosyVoice模型...")
@@ -72,9 +74,14 @@ def generate_audio_cosyvoice(text, output_path, progress_callback=None):
         
         # 生成音频
         output = cosyvoice.inference_sft(text, COSYVOICE_SPEAKER)
-        
-        # 保存
-        torchaudio.save(output_path, output['tts_speech'], 22050)
+
+        # CosyVoice returns a generator, iterate to get result
+        for item in output:
+            tts_speech = item['tts_speech']
+
+        # 保存 (使用soundfile，避免torchcodec依赖)
+        import soundfile as sf
+        sf.write(output_path, tts_speech.cpu().numpy().T, 22050)
         
         return True
         

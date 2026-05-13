@@ -7,7 +7,24 @@ PPT文本提取模块
 import os
 from pathlib import Path
 from pptx import Presentation
+from pptx.shapes.group import GroupShape
 from src.config import OUTPUT_PPT, INPUT_DIR, OUTPUT_SLIDES_TEXT
+
+
+def get_all_text_from_shape(shape):
+    """递归获取形状及其子形状的所有文本"""
+    texts = []
+    
+    # 获取当前形状的文本
+    if hasattr(shape, "text") and shape.text.strip():
+        texts.append(shape.text.strip())
+    
+    # 如果是组合形状，递归获取子形状文本
+    if isinstance(shape, GroupShape):
+        for sub_shape in shape.shapes:
+            texts.extend(get_all_text_from_shape(sub_shape))
+    
+    return texts
 
 
 def extract_slides_text(ppt_path, progress_callback=None):
@@ -20,12 +37,19 @@ def extract_slides_text(ppt_path, progress_callback=None):
         slide_content = []
         
         for shape in slide.shapes:
-            if hasattr(shape, "text") and shape.text.strip():
-                slide_content.append(shape.text.strip())
+            slide_content.extend(get_all_text_from_shape(shape))
+        
+        # 去重并保持顺序
+        seen = set()
+        unique_content = []
+        for text in slide_content:
+            if text not in seen:
+                seen.add(text)
+                unique_content.append(text)
         
         slides_text.append({
             "slide_num": i + 1,
-            "content": "\n".join(slide_content)
+            "content": "\n".join(unique_content)
         })
         
         if progress_callback:
@@ -59,18 +83,19 @@ def run(ppt_path=None, progress_callback=None):
     """运行完整流程：提取PPT文本"""
     
     if ppt_path is None:
-        # 优先使用input目录的ppt，否则使用生成的ppt
-        input_ppt = INPUT_DIR / "input.pptx"
+        # 优先使用生成的ppt，其次是input目录的ppt
         generated_ppt = OUTPUT_PPT
+        input_ppt = INPUT_DIR / "input.pptx"
         
-        if input_ppt.exists():
-            ppt_path = input_ppt
-            if progress_callback:
-                progress_callback(f"使用输入PPT: {ppt_path}")
-        elif generated_ppt.exists():
+        # 优先使用生成的PPT（如果存在且非空）
+        if generated_ppt.exists() and generated_ppt.stat().st_size > 0:
             ppt_path = generated_ppt
             if progress_callback:
                 progress_callback(f"使用生成的PPT: {ppt_path}")
+        elif input_ppt.exists() and input_ppt.stat().st_size > 0:
+            ppt_path = input_ppt
+            if progress_callback:
+                progress_callback(f"使用输入PPT: {ppt_path}")
         else:
             raise FileNotFoundError("未找到PPT文件")
     

@@ -6,7 +6,7 @@
 
 import os
 from pathlib import Path
-from src.config import get_llm_client, get_llm_model_name, OUTPUT_SLIDES_TEXT, OUTPUT_NARRATION
+from src.config import get_llm_client, get_llm_model_name, OUTPUT_SLIDES_TEXT, OUTPUT_NARRATION, LLM_MODE
 
 
 def load_slides_text(file_path):
@@ -74,12 +74,28 @@ PPT内容：
         progress_callback(f"正在生成第 {slide_index + 1} 页解说词...")
     
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-        )
-        return response.choices[0].message.content.strip()
+        if LLM_MODE == "api":
+            # Anthropic/MiniMax API
+            response = client.messages.create(
+                model=model,
+                max_tokens=4096,
+                system="You are a helpful assistant.",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            # 遍历content获取文本，跳过thinking块
+            for block in response.content:
+                if block.type == 'text':
+                    return block.text.strip()
+        else:
+            # OpenAI/SGlang API
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+            )
+            return response.choices[0].message.content.strip()
     except Exception as e:
         if progress_callback:
             progress_callback(f"LLM调用失败: {e}，使用离线模式")

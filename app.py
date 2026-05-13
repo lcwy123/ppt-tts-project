@@ -27,9 +27,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 import gradio as gr
 from src.config import (
     LLM_MODE, TTS_MODE, LOCAL_LLM_URL, LOCAL_LLM_MODEL,
-    ARK_API_KEY, ARK_MODEL, INPUT_DIR, OUTPUT_DIR, AUDIO_DIR
+    MINIMAX_API_KEY, MINIMAX_MODEL, INPUT_DIR, OUTPUT_DIR, AUDIO_DIR,
+    OUTPUT_OUTLINE, OUTPUT_PPT, OUTPUT_SLIDES_TEXT, OUTPUT_NARRATION,
+    OUTPUT_AUDIO_DURATIONS, OUTPUT_FINAL_PPT
 )
 from src.backup import list_backups
+from src import run_outline, run_ppt, run_multimodal, run_extract, run_narration, run_audio, run_embed
 from main import PipelineRunner
 
 logger.info("WebUI模块加载中...")
@@ -38,6 +41,13 @@ logger.info("WebUI模块加载中...")
 runner = None
 runner_lock = threading.Lock()
 
+# 步骤状态追踪
+step_status = {
+    "outline": False, "ppt": False, "extract": False,
+    "narration": False, "audio": False, "embed": False
+}
+step_status_lock = threading.Lock()
+
 
 def get_runner():
     global runner
@@ -45,15 +55,15 @@ def get_runner():
         return runner
 
 
-def start_pipeline(input_text, llm_mode, local_llm_url, local_llm_model, 
-                   ark_api_key, ark_model, tts_mode):
+def start_pipeline(input_text, llm_mode, local_llm_url, local_llm_model,
+                   minimax_api_key, minimax_model, tts_mode, input_docx=None):
     """启动流水线"""
     global runner
-    logger.info(f"start_pipeline called: llm_mode={llm_mode}, tts_mode={tts_mode}")
-    
+    logger.info(f"start_pipeline called: llm_mode={llm_mode}, tts_mode={tts_mode}, input_docx={input_docx}")
+
     with runner_lock:
         runner = PipelineRunner()
-    
+
     # 在后台线程中运行
     def run():
         global runner
@@ -63,16 +73,51 @@ def start_pipeline(input_text, llm_mode, local_llm_url, local_llm_model,
             try:
                 current_runner.run_full_pipeline(
                     input_text=input_text if input_text and input_text.strip() else None,
-                    tts_mode=tts_mode
+                    tts_mode=tts_mode,
+                    input_docx=input_docx
                 )
                 logger.info("流水线执行完成")
             except Exception as e:
                 logger.error(f"流水线执行出错: {e}")
-    
+
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
-    
+
     return "🚀 流水线已启动..."
+
+
+def run_step_ppt_multimodal(input_docx, progress_callback=None):
+    """步骤2: 多模态模式生成PPT（从Word文档）"""
+    r = _get_or_create_runner()
+    r._current_step = "PPT生成"
+
+    def do_run():
+        global runner
+        if not input_docx or not Path(input_docx).exists():
+            r._log("⚠ 警告: Word文档不存在，请先上传")
+            return
+
+        r._log("="*50)
+        r._log("步骤2: 多模态PPT生成")
+        r._log("="*50)
+        r._log(f"输入文档: {input_docx}")
+
+        try:
+            run_multimodal(input_docx, progress_callback=r._progress_callback)
+            with step_status_lock:
+                step_status["ppt"] = True
+            r._log("="*50)
+            r._log("✅ 多模态PPT生成完成！")
+            r._log("请在【输出文件】Tab查看生成的PPT")
+            r._log("="*50)
+        except Exception as e:
+            r._log(f"✗ 步骤2出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    threading.Thread(target=do_run, daemon=True).start()
+    # 返回当前日志让UI立即显示
+    return "\n".join(r.get_logs()[-20:]) if r.get_logs() else "正在启动多模态PPT生成..."
 
 
 def stop_pipeline():
@@ -155,6 +200,223 @@ def get_backup_list():
     return result
 
 
+# ============== 分步执行函数 ==============
+
+def _get_or_create_runner():
+    """获取或创建运行器"""
+    global runner
+    with runner_lock:
+        if runner is None:
+            runner = PipelineRunner()
+        return runner
+
+
+def run_step_outline(input_text, llm_mode, local_llm_url, local_llm_model,
+                     minimax_api_key, minimax_model):
+    """步骤1: 生成Word提纲"""
+    r = _get_or_create_runner()
+    r._current_step = "提纲生成"
+
+    def do_run():
+        global runner
+        import src.config as cfg
+        old_mode = cfg.LLM_MODE
+        old_url = cfg.LOCAL_LLM_URL
+        old_model = cfg.LOCAL_LLM_MODEL
+        old_key = cfg.MINIMAX_API_KEY
+        try:
+            cfg.LLM_MODE = llm_mode
+            cfg.LOCAL_LLM_URL = local_llm_url
+            cfg.LOCAL_LLM_MODEL = local_llm_model
+            if minimax_api_key and minimax_api_key != "****":
+                cfg.MINIMAX_API_KEY = minimax_api_key
+
+            r._log("="*50)
+            r._log("步骤1: 生成Word提纲")
+            r._log("="*50)
+            run_outline(
+                input_text=input_text.strip() if input_text and input_text.strip() else None,
+                progress_callback=r._progress_callback
+            )
+            with step_status_lock:
+                step_status["outline"] = True
+            r._log("✓ 步骤1完成")
+        except Exception as e:
+            r._log(f"✗ 步骤1出错: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            cfg.LLM_MODE = old_mode
+            cfg.LOCAL_LLM_URL = old_url
+            cfg.LOCAL_LLM_MODEL = old_model
+            cfg.MINIMAX_API_KEY = old_key
+
+    threading.Thread(target=do_run, daemon=True).start()
+    return "步骤1(生成提纲)已启动..."
+
+
+def run_step_ppt():
+    """步骤2: 生成PPT"""
+    r = _get_or_create_runner()
+    r._current_step = "PPT生成"
+
+    def do_run():
+        global runner
+        if not OUTPUT_OUTLINE.exists():
+            r._log("⚠ 警告: ppt_outline.docx 不存在，步骤2可能失败")
+        try:
+            r._log("="*50)
+            r._log("步骤2: 生成PPT")
+            r._log("="*50)
+            run_ppt(progress_callback=r._progress_callback)
+            with step_status_lock:
+                step_status["ppt"] = True
+            r._log("✓ 步骤2完成")
+        except Exception as e:
+            r._log(f"✗ 步骤2出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    threading.Thread(target=do_run, daemon=True).start()
+    return "步骤2(生成PPT)已启动..."
+
+
+def run_step_extract():
+    """步骤3: 提取PPT文本"""
+    r = _get_or_create_runner()
+    r._current_step = "文本提取"
+
+    def do_run():
+        global runner
+        if not OUTPUT_PPT.exists():
+            r._log("⚠ 警告: generated.pptx 不存在，步骤3可能失败")
+        try:
+            r._log("="*50)
+            r._log("步骤3: 提取PPT文本")
+            r._log("="*50)
+            run_extract(progress_callback=r._progress_callback)
+            with step_status_lock:
+                step_status["extract"] = True
+            r._log("✓ 步骤3完成")
+        except Exception as e:
+            r._log(f"✗ 步骤3出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    threading.Thread(target=do_run, daemon=True).start()
+    return "步骤3(提取文本)已启动..."
+
+
+def run_step_narration():
+    """步骤4: 生成解说词"""
+    r = _get_or_create_runner()
+    r._current_step = "解说词生成"
+
+    def do_run():
+        global runner
+        if not OUTPUT_SLIDES_TEXT.exists():
+            r._log("⚠ 警告: slides_text.txt 不存在，步骤4可能失败")
+        try:
+            r._log("="*50)
+            r._log("步骤4: 生成解说词")
+            r._log("="*50)
+            run_narration(progress_callback=r._progress_callback)
+            with step_status_lock:
+                step_status["narration"] = True
+            r._log("✓ 步骤4完成")
+        except Exception as e:
+            r._log(f"✗ 步骤4出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    threading.Thread(target=do_run, daemon=True).start()
+    return "步骤4(生成解说词)已启动..."
+
+
+def run_step_audio(tts_mode):
+    """步骤5: 生成音频"""
+    r = _get_or_create_runner()
+    r._current_step = "音频生成"
+
+    def do_run():
+        global runner
+        if not OUTPUT_NARRATION.exists():
+            r._log("⚠ 警告: narration.txt 不存在，步骤5可能失败")
+        try:
+            r._log("="*50)
+            r._log("步骤5: 生成音频")
+            r._log("="*50)
+            run_audio(tts_mode=tts_mode, progress_callback=r._progress_callback)
+            with step_status_lock:
+                step_status["audio"] = True
+            r._log("✓ 步骤5完成")
+        except Exception as e:
+            r._log(f"✗ 步骤5出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    threading.Thread(target=do_run, daemon=True).start()
+    return "步骤5(生成音频)已启动..."
+
+
+def run_step_embed():
+    """步骤6: 嵌入音频到PPT"""
+    r = _get_or_create_runner()
+    r._current_step = "音频嵌入"
+
+    def do_run():
+        global runner
+        if not OUTPUT_PPT.exists():
+            r._log("⚠ 警告: generated.pptx 不存在，步骤6可能失败")
+        if not OUTPUT_AUDIO_DURATIONS.exists():
+            r._log("⚠ 警告: audio_durations.json 不存在，步骤6可能失败")
+        try:
+            r._log("="*50)
+            r._log("步骤6: 嵌入音频到PPT")
+            r._log("="*50)
+            run_embed(progress_callback=r._progress_callback)
+            with step_status_lock:
+                step_status["embed"] = True
+            r._log("✓ 步骤6完成")
+        except Exception as e:
+            r._log(f"✗ 步骤6出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    threading.Thread(target=do_run, daemon=True).start()
+    return "步骤6(嵌入音频)已启动..."
+
+
+# ============== 文件刷新函数 ==============
+
+def get_output_file(file_path):
+    """返回文件路径（如果存在），否则返回None"""
+    if file_path and Path(file_path).exists():
+        return str(file_path)
+    return None
+
+
+def refresh_output_files():
+    """刷新输出文件列表"""
+    return (
+        get_output_file(OUTPUT_OUTLINE),
+        get_output_file(OUTPUT_PPT),
+        get_output_file(OUTPUT_SLIDES_TEXT),
+        get_output_file(OUTPUT_NARRATION),
+        get_output_file(OUTPUT_FINAL_PPT),
+    )
+
+
+def refresh_audio_files():
+    """刷新音频文件列表"""
+    audio_files = []
+    if AUDIO_DIR.exists():
+        for f in sorted(AUDIO_DIR.iterdir()):
+            if f.is_file() and f.suffix == '.mp3':
+                audio_files.append(str(f))
+    return audio_files if audio_files else None
+
+
 def main(port=7860):
     """启动WebUI"""
     logger.info(f"WebUI启动中... port={port}")
@@ -169,6 +431,62 @@ def main(port=7860):
     
     logger.info("创建Gradio界面...")
     
+    AUTO_REFRESH_JS = r"""
+<script>
+(function() {
+    var lastLogLen = 0;
+    var MARK_OK = '\u2713';  // ✓
+    var MARK_ERR = '\u2717'; // ✗
+    var MARK_BLK = '\u26d4'; // ⛩
+    function autoRefreshLogs() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/run/refresh_logs', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var resp = JSON.parse(xhr.responseText);
+                    if (resp && resp.data && resp.data[0] !== undefined) {
+                        var ta = document.querySelector('#status_text textarea');
+                        if (ta) {
+                            ta.value = resp.data[0];
+                            ta.dispatchEvent(new Event('input', {bubbles: true}));
+                        }
+                        var log = resp.data[0];
+                        if (log.length > lastLogLen) {
+                            var newLog = log.substring(lastLogLen);
+                            var notif = document.querySelector('#step_notification');
+                            if (newLog.indexOf(MARK_OK) !== -1) {
+                                if (notif) {
+                                    notif.textContent = MARK_OK + ' 步骤执行完成';
+                                    notif.style.background = '#e8f5e9';
+                                    notif.style.color = '#2e7d32';
+                                    notif.style.borderColor = '#a5d6a7';
+                                    notif.style.display = 'block';
+                                    setTimeout(function(){ notif.style.display = 'none'; }, 5000);
+                                }
+                            } else if (newLog.indexOf(MARK_ERR) !== -1) {
+                                if (notif) {
+                                    notif.textContent = MARK_BLK + ' 步骤执行出错，请查看日志';
+                                    notif.style.background = '#ffebee';
+                                    notif.style.color = '#c62828';
+                                    notif.style.borderColor = '#ef9a9a';
+                                    notif.style.display = 'block';
+                                }
+                            }
+                            lastLogLen = log.length;
+                        }
+                    }
+                } catch(e) {}
+            }
+        };
+        xhr.send('[]');
+    }
+    setInterval(autoRefreshLogs, 3000);
+})();
+</script>
+"""
+
     with gr.Blocks(title="PPT-TTS-Project") as demo:
         gr.Markdown("""
         # 🎤 PPT-TTS-Project
@@ -194,13 +512,13 @@ def main(port=7860):
                 value=LOCAL_LLM_MODEL,
                 label="本地模型名称"
             )
-            ark_api_key = gr.Textbox(
-                value="****" if ARK_API_KEY else "",
-                label="火山方舟API Key"
+            minimax_api_key = gr.Textbox(
+                value="****" if MINIMAX_API_KEY else "",
+                label="MiniMax API Key"
             )
-            ark_model = gr.Textbox(
-                value=ARK_MODEL,
-                label="火山方舟模型"
+            minimax_model = gr.Textbox(
+                value=MINIMAX_MODEL,
+                label="MiniMax模型"
             )
             
             gr.Markdown("### TTS 配置")
@@ -217,43 +535,84 @@ def main(port=7860):
         # Tab 2: 输入
         with gr.Tab("📝 输入"):
             logger.info("创建Tab: 输入")
+            gr.Markdown("### 文本输入")
             input_text = gr.Textbox(
                 value=default_input,
                 label="输入主题文字",
-                lines=15,
+                lines=10,
                 placeholder="输入PPT的主题内容..."
             )
             gr.Markdown("""
             💡 **提示**: 将文字保存到 `data/input/input.txt` 也可直接读取
             """)
-        
+
+            gr.Markdown("---")
+            gr.Markdown("### Word文档输入（多模态）")
+            gr.Markdown("上传包含文字、图片、表格的Word文档，生成图文并茂的PPT")
+            input_docx = gr.File(
+                label="上传Word文档 (.doc/.docx)",
+                file_types=[".docx", ".doc"],
+                file_count="single"
+            )
+            btn_step2_multimodal = gr.Button("2️⃣ 生成多模态PPT", variant="secondary")
+            gr.Markdown("""
+            ⚠️ **多模态模式说明**: 上传Word文档后，点击上方按钮生成PPT（将跳过步骤1直接生成）
+            """)
+
         # Tab 3: 执行
         with gr.Tab("🚀 执行"):
             logger.info("创建Tab: 执行")
+            notification_html = gr.HTML("""
+            <div id="step_notification" style="
+                padding: 12px 16px; border-radius: 8px; margin-bottom: 10px;
+                font-size: 14px; display: none; background: #e8f5e9; color: #2e7d32;
+                border: 1px solid #a5d6a7;">
+            </div>
+            """)
+            gr.Markdown("### 分步执行")
             with gr.Row():
-                start_btn = gr.Button("▶ 开始生成", variant="primary")
+                btn_step1 = gr.Button("1️⃣ 生成提纲", variant="primary")
+                btn_step2 = gr.Button("2️⃣ 生成PPT", variant="primary")
+                btn_step3 = gr.Button("3️⃣ 提取文本", variant="primary")
+            with gr.Row():
+                btn_step4 = gr.Button("4️⃣ 生成解说词", variant="primary")
+                btn_step5 = gr.Button("5️⃣ 生成音频", variant="primary")
+                btn_step6 = gr.Button("6️⃣ 嵌入音频", variant="primary")
+
+            gr.Markdown("---")
+            gr.Markdown("### 全量执行")
+            with gr.Row():
+                start_btn = gr.Button("▶ 开始生成(全流程)", variant="primary")
                 stop_btn = gr.Button("⏹ 停止")
                 pause_btn = gr.Button("⏸ 暂停")
                 resume_btn = gr.Button("▶ 继续")
-            
-            status_text = gr.Textbox(label="执行状态", lines=20, interactive=False)
-            
+
+            gr.Markdown("---")
+            gr.Markdown("### 执行日志")
+            status_text = gr.Textbox(label="执行状态", lines=15, interactive=False)
+
             with gr.Row():
                 refresh_btn = gr.Button("🔄 刷新日志")
                 clear_btn = gr.Button("🗑 清空日志")
-        
+
         # Tab 4: 输出文件
         with gr.Tab("📁 输出文件"):
             logger.info("创建Tab: 输出文件")
-            gr.Markdown("### 生成的文件")
-            output_files = gr.Textbox(label="输出文件列表", lines=10, interactive=False)
+            gr.Markdown("### 输出文件下载")
+            gr.Markdown("*点击文件名即可下载*")
+            outline_file = gr.File(label="PPT提纲 (ppt_outline.docx)", file_types=[".docx"])
+            ppt_file = gr.File(label="生成的PPT (generated.pptx)", file_types=[".pptx"])
+            slides_text_file = gr.File(label="幻灯片文本 (slides_text.txt)", file_types=[".txt"])
+            narration_file = gr.File(label="解说词 (narration.txt)", file_types=[".txt"])
+            final_ppt_file = gr.File(label="最终PPT带音频 (final_with_audio.pptx)", file_types=[".pptx"])
             refresh_files_btn = gr.Button("🔄 刷新文件列表")
-        
+
         # Tab 5: 音频
         with gr.Tab("🔊 音频"):
             logger.info("创建Tab: 音频")
-            gr.Markdown("### 已生成的音频文件")
-            audio_files = gr.Textbox(label="音频文件", lines=15, interactive=False)
+            gr.Markdown("### 音频文件下载")
+            gr.Markdown("*每个幻灯片对应的音频文件*")
+            audio_files_list = gr.File(label="音频文件 (*.mp3)", file_types=[".mp3"])
             refresh_audio_btn = gr.Button("🔄 刷新音频列表")
         
         # Tab 6: 备份
@@ -265,15 +624,34 @@ def main(port=7860):
         
         # 事件绑定
         logger.info("绑定事件...")
-        
+
+        # 分步执行按钮
+        btn_step1.click(
+            fn=run_step_outline,
+            inputs=[input_text, llm_mode_radio, local_llm_url, local_llm_model,
+                    minimax_api_key, minimax_model],
+            outputs=status_text
+        )
+        btn_step2.click(fn=run_step_ppt, inputs=[], outputs=status_text)
+        btn_step3.click(fn=run_step_extract, inputs=[], outputs=status_text)
+        btn_step4.click(fn=run_step_narration, inputs=[], outputs=status_text)
+        btn_step5.click(fn=run_step_audio, inputs=[tts_mode_radio], outputs=status_text)
+        btn_step6.click(fn=run_step_embed, inputs=[], outputs=status_text)
+        logger.info("  - 分步按钮绑定完成")
+
         start_btn.click(
             fn=start_pipeline,
             inputs=[input_text, llm_mode_radio, local_llm_url, local_llm_model,
-                   ark_api_key, ark_model, tts_mode_radio],
+                   minimax_api_key, minimax_model, tts_mode_radio, input_docx],
+            outputs=status_text
+        )
+        btn_step2_multimodal.click(
+            fn=run_step_ppt_multimodal,
+            inputs=[input_docx],
             outputs=status_text
         )
         logger.info("  - start_btn 绑定完成")
-        
+
         stop_btn.click(
             fn=stop_pipeline,
             inputs=[],
@@ -289,54 +667,55 @@ def main(port=7860):
             inputs=[],
             outputs=status_text
         )
-        
+
         refresh_btn.click(
             fn=refresh_logs,
             inputs=[],
             outputs=status_text
         )
-        
+
         clear_btn.click(
             fn=lambda: "",
             inputs=[],
             outputs=status_text
         )
-        
+
+        # 通过JS轮询自动刷新日志
         refresh_files_btn.click(
-            fn=list_output_files,
+            fn=refresh_output_files,
             inputs=[],
-            outputs=output_files
+            outputs=[outline_file, ppt_file, slides_text_file, narration_file, final_ppt_file]
         )
-        
+
         refresh_audio_btn.click(
-            fn=list_audio_files,
+            fn=refresh_audio_files,
             inputs=[],
-            outputs=audio_files
+            outputs=audio_files_list
         )
-        
+
         refresh_backup_btn.click(
             fn=get_backup_list,
             inputs=[],
             outputs=backup_list
         )
-        
+
         # 初始加载回调
         demo.load(
-            fn=list_output_files,
+            fn=refresh_output_files,
             inputs=None,
-            outputs=output_files
+            outputs=[outline_file, ppt_file, slides_text_file, narration_file, final_ppt_file]
         )
         demo.load(
-            fn=list_audio_files,
+            fn=refresh_audio_files,
             inputs=None,
-            outputs=audio_files
+            outputs=audio_files_list
         )
         demo.load(
             fn=get_backup_list,
             inputs=None,
             outputs=backup_list
         )
-        
+
         logger.info("所有事件绑定完成")
     
     logger.info("启动Gradio服务...")

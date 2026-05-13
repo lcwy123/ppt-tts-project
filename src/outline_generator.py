@@ -9,12 +9,12 @@ from pathlib import Path
 from docx import Document
 from docx.shared import Pt
 from src.config import (
-    get_llm_client, get_llm_model_name, OUTPUT_OUTLINE, INPUT_DIR
+    get_llm_client, get_llm_model_name, OUTPUT_OUTLINE, INPUT_DIR, LLM_MODE
 )
 
 def generate_outline_from_text(input_text, progress_callback=None):
     """使用LLM从输入文字生成PPT提纲"""
-    
+
     client = get_llm_client()
     model = get_llm_model_name()
     
@@ -49,18 +49,36 @@ def generate_outline_from_text(input_text, progress_callback=None):
         progress_callback(f"正在调用LLM生成提纲...")
     
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-        )
-        outline_text = response.choices[0].message.content
-        
+        if LLM_MODE == "api":
+            # Anthropic/MiniMax API
+            response = client.messages.create(
+                model=model,
+                max_tokens=4096,
+                system="You are a helpful assistant.",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            # 遍历content获取文本，跳过thinking块
+            outline_text = ""
+            for block in response.content:
+                if block.type == 'text':
+                    outline_text = block.text
+                    break
+        else:
+            # OpenAI/SGlang API
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+            )
+            outline_text = response.choices[0].message.content
+
         if progress_callback:
             progress_callback(f"提纲生成成功")
-        
+
         return outline_text
-        
+
     except Exception as e:
         if progress_callback:
             progress_callback(f"LLM调用失败: {str(e)}，使用离线模式")

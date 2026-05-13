@@ -29,22 +29,29 @@ for dir_path in [DATA_DIR, INPUT_DIR, OUTPUT_DIR, AUDIO_DIR, BACKUP_DIR, LOGS_DI
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # LLM 配置
-LLM_MODE = os.getenv("LLM_MODE", "local")  # local 或 api
+LLM_MODE = os.getenv("LLM_MODE", "api")  # local 或 api
 LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://localhost:30000/v1")
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "Qwen3.5-9B")
 LOCAL_LLM_API_KEY = os.getenv("LOCAL_LLM_API_KEY", "token-xxx")
 
-# 火山方舟 API 配置
-ARK_API_KEY = os.getenv("ARK_API_KEY", "")
-ARK_MODEL = os.getenv("ARK_MODEL", "doubao-pro-32k")
-ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+# MiniMax API 配置 (Anthropic兼容)
+def _clean_api_key(key):
+    """清除API key中的不可见字符"""
+    if not key:
+        return key
+    # 只保留可打印ASCII字符（32-126）和换行符
+    return ''.join(c for c in key if 32 <= ord(c) <= 126)
+
+MINIMAX_API_KEY = _clean_api_key(os.getenv("MINIMAX_API_KEY", ""))
+MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
+MINIMAX_BASE_URL = "https://api.minimaxi.com/anthropic"
 
 # TTS 配置
 TTS_MODE = os.getenv("TTS_MODE", "cosyvoice")  # cosyvoice, edge, api
 EDGE_VOICE = os.getenv("EDGE_VOICE", "zh-CN-XiaoxiaoNeural")
 
 # CosyVoice 配置
-COSYVOICE_SPEAKER = os.getenv("COSYVOICE_SPEAKER", "ChineseFemale")
+COSYVOICE_SPEAKER = os.getenv("COSYVOICE_SPEAKER", "中文女")
 COSYVOICE_MODE = os.getenv("COSYVOICE_MODE", "sft")  # sft, naive, pretrained
 
 # PPT 配置
@@ -76,10 +83,10 @@ def get_llm_client():
             base_url=LOCAL_LLM_URL,
         )
     else:
-        from openai import OpenAI
-        return OpenAI(
-            api_key=ARK_API_KEY,
-            base_url=ARK_BASE_URL,
+        from anthropic import Anthropic
+        return Anthropic(
+            api_key=MINIMAX_API_KEY,
+            base_url=MINIMAX_BASE_URL,
         )
 
 def get_llm_model_name():
@@ -87,4 +94,4 @@ def get_llm_model_name():
     if LLM_MODE == "local":
         return LOCAL_LLM_MODEL
     else:
-        return ARK_MODEL
+        return MINIMAX_MODEL

@@ -22,6 +22,10 @@ requests>=2.31.0
 openai>=1.0.0
 gradio>=4.0.0
 
+# ppt-master集成依赖（SVG→原生PPTX转换）
+svglib>=1.5.0
+reportlab>=4.0.0
+
 # 注意: CosyVoice 需要单独安装
 # 如需使用本地TTS，运行:
 #   pip install -r requirements-gpu.txt
