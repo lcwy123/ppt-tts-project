@@ -472,7 +472,7 @@ def add_formatted_content(text_frame, content: str, text_color, font_size: int =
 
 def generate_pptx_with_images(extracted_data: Dict, slides_data: list, output_path: str, progress_callback=None) -> str:
     """
-    生成带图片的PPT
+    基于模板复制方式生成带图片的PPT
 
     Args:
         extracted_data: docx_extractor提取的数据
@@ -485,53 +485,121 @@ def generate_pptx_with_images(extracted_data: Dict, slides_data: list, output_pa
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
     from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from copy import deepcopy
+    import shutil
 
     if progress_callback:
         progress_callback(f"开始生成PPT，共{len(slides_data)}页...")
 
-    # 创建PPT
-    prs = Presentation()
+    # 1. 复制模板1.pptx到输出路径
+    template_path = Path(__file__).parent / "模板1.pptx"
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(str(template_path), output_path)
 
-    # 幻灯片尺寸：10 x 7.5 英寸
+    # 2. 打开复制的PPT
+    prs = Presentation(output_path)
+
+    # 幻灯片尺寸
     SLIDE_WIDTH = 10
     SLIDE_HEIGHT = 7.5
 
-    DARK_BLUE = RGBColor(*PPT_TEMPLATE_STYLE["title_bg_color"])
-    LIGHT_BLUE = RGBColor(*PPT_TEMPLATE_STYLE["content_bg_color"])
-    WHITE = RGBColor(*PPT_TEMPLATE_STYLE["title_font_color"])
-    TEXT_COLOR = RGBColor(*PPT_TEMPLATE_STYLE["content_font_color"])
+    WHITE = RGBColor(255, 255, 255)
+    TEXT_COLOR = RGBColor(0, 0, 0)
+    DARK_RED = RGBColor(139, 0, 0)
+
+    # 版式索引
+    LAYOUT_TITLE_SLIDE = 0   # 1_标题幻灯片
+    LAYOUT_CONTENT = 1        # 仅标题 (进标题)
+    LAYOUT_END = 2           # 1_自定义版式
 
     # 构建图片映射
     image_map = {img["id"]: img for img in extracted_data.get("images", [])}
 
-    for i, slide in enumerate(slides_data):
-        page_num = slide.get("page_num", i + 1)
-        title = slide.get("title", "")
-        content = slide.get("content", "").strip()
-        image_ids = slide.get("images", [])
-        is_cover = slide.get("is_cover", i == 0)
+    def clear_slide_except_background(slide):
+        """清除幻灯片上除背景外的所有内容"""
+        # 获取需要删除的shape列表
+        shapes_to_remove = []
+        for shape in slide.shapes:
+            shapes_to_remove.append(shape)
+
+        # 删除所有形状
+        for shape in shapes_to_remove:
+            sp = shape.element
+            sp.getparent().remove(sp)
+
+    def add_text_to_placeholder(slide, placeholder_idx, text, font_size=28, bold=False, color=None):
+        """向placeholder添加文本"""
+        for shape in slide.shapes:
+            if shape.is_placeholder:
+                ph = shape.placeholder_format
+                if ph.idx == placeholder_idx:
+                    tf = shape.text_frame
+                    tf.clear()
+                    p = tf.paragraphs[0]
+                    p.text = text
+                    p.font.size = Pt(font_size)
+                    p.font.bold = bold
+                    if color:
+                        p.font.color.rgb = color
+                    return True
+        return False
+
+    def add_text_content_to_slide(slide, content, text_color=TEXT_COLOR):
+        """向幻灯片添加正文内容"""
+        # 查找内容区域的文本框
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                text = shape.text_frame.text
+                # 找到包含占位符的形状后添加内容
+                if hasattr(shape, 'placeholder_format') and shape.placeholder_format.idx == 1:
+                    tf = shape.text_frame
+                    tf.clear()
+                    add_formatted_content(tf, content, text_color)
+                    return True
+
+        # 如果没有找到placeholder，手动添加文本框
+        text_left = Inches(0.8)
+        text_top = Inches(1.5)
+        text_width = Inches(8.4)
+        text_height = Inches(5.5)
+
+        text_frame = slide.shapes.add_textbox(text_left, text_top, text_width, text_height)
+        tf = text_frame.text_frame
+        tf.word_wrap = True
+        add_formatted_content(tf, content, text_color)
+        return True
+
+    # 3. 清空模板中的所有幻灯片
+    # 先删除所有现有幻灯片
+    while len(prs.slides) > 0:
+        # 获取slide的rId
+        slide_id = prs.slides._sldIdLst[0]
+        prs.part.drop_rel(slide_id.rId)
+        del prs.slides._sldIdLst[0]
+
+    # 4. 根据slides_data重建幻灯片
+    total_pages = len(slides_data)
+
+    for i, slide_info in enumerate(slides_data):
+        page_num = slide_info.get("page_num", i + 1)
+        title = slide_info.get("title", "")
+        content = slide_info.get("content", "").strip()
+        image_ids = slide_info.get("images", [])
+        is_cover = slide_info.get("is_cover", i == 0)
 
         if progress_callback:
-            progress_callback(f"生成第 {page_num}/{len(slides_data)} 页: {title}")
+            progress_callback(f"生成第 {page_num}/{total_pages} 页: {title}")
 
         if i == 0:
-            # 封面页 - 使用空白布局，从头构建
-            slide_layout = prs.slide_layouts[6]  # 空白布局
+            # 第0页：标题页，使用1_标题幻灯片版式
+            slide_layout = prs.slide_layouts[LAYOUT_TITLE_SLIDE]
             ppt_slide = prs.slides.add_slide(slide_layout)
 
-            # 设置背景
-            background = ppt_slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = DARK_BLUE
+            # 清除默认内容
+            clear_slide_except_background(ppt_slide)
 
             # 添加标题
-            title_left = Inches(0.5)
-            title_top = Inches(2.5)
-            title_width = Inches(9)
-            title_height = Inches(1.5)
-
-            title_box = ppt_slide.shapes.add_textbox(title_left, title_top, title_width, title_height)
+            title_box = ppt_slide.shapes.add_textbox(Inches(0.5), Inches(2.5), Inches(9), Inches(1.5))
             tf = title_box.text_frame
             tf.word_wrap = True
             p = tf.paragraphs[0]
@@ -543,43 +611,52 @@ def generate_pptx_with_images(extracted_data: Dict, slides_data: list, output_pa
 
             # 副标题
             if content:
-                subtitle_box = ppt_slide.shapes.add_textbox(title_left, Inches(4.2), title_width, Inches(0.8))
+                subtitle_box = ppt_slide.shapes.add_textbox(Inches(0.5), Inches(4.2), Inches(9), Inches(0.8))
                 tf = subtitle_box.text_frame
                 p = tf.paragraphs[0]
                 p.text = content
                 p.font.size = Pt(24)
                 p.font.color.rgb = WHITE
                 p.alignment = PP_ALIGN.CENTER
-        else:
-            # 内容页 - 使用空白布局
-            slide_layout = prs.slide_layouts[6]  # 空白布局
+
+        elif i == total_pages - 1:
+            # 最后一页：使用1_自定义版式
+            slide_layout = prs.slide_layouts[LAYOUT_END]
             ppt_slide = prs.slides.add_slide(slide_layout)
 
-            # 设置背景
-            background = ppt_slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = LIGHT_BLUE
+            # 清除默认内容
+            clear_slide_except_background(ppt_slide)
 
-            # 标题栏背景 - 使用实际幻灯片宽度
-            title_bg = ppt_slide.shapes.add_shape(
-                1, Inches(0), Inches(0), Inches(SLIDE_WIDTH), Inches(1.0)
-            )
-            title_bg.fill.solid()
-            title_bg.fill.fore_color.rgb = DARK_BLUE
-            title_bg.line.fill.background()
+            # 添加标题
+            title_box = ppt_slide.shapes.add_textbox(Inches(0.5), Inches(2.5), Inches(9), Inches(1.5))
+            tf = title_box.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.text = title
+            p.font.size = Pt(44)
+            p.font.bold = True
+            p.font.color.rgb = WHITE
+            p.alignment = PP_ALIGN.CENTER
 
-            # 标题文字
-            title_box = ppt_slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9), Inches(0.6))
+        else:
+            # 正文页：使用"仅标题"(进标题)版式
+            slide_layout = prs.slide_layouts[LAYOUT_CONTENT]
+            ppt_slide = prs.slides.add_slide(slide_layout)
+
+            # 清除默认内容
+            clear_slide_except_background(ppt_slide)
+
+            # 添加标题
+            title_box = ppt_slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(9), Inches(0.8))
             tf = title_box.text_frame
             tf.word_wrap = True
             p = tf.paragraphs[0]
             p.text = title
             p.font.size = Pt(28)
             p.font.bold = True
-            p.font.color.rgb = WHITE
+            p.font.color.rgb = DARK_RED
 
-            # 内容区域布局
+            # 添加内容
             if image_ids:
                 # 有图片：左侧文字(60%)，右侧图片(40%)
                 text_left = Inches(0.5)
@@ -592,48 +669,38 @@ def generate_pptx_with_images(extracted_data: Dict, slides_data: list, output_pa
                 img_max_width = Inches(3.3)
                 img_max_height = Inches(5.5)
 
-                # 添加文字内容（支持项目符号和加粗）
+                # 添加文字内容
                 text_frame = ppt_slide.shapes.add_textbox(text_left, text_top, text_width, text_height)
                 tf = text_frame.text_frame
                 tf.word_wrap = True
-
                 add_formatted_content(tf, content, TEXT_COLOR)
 
-                # 添加图片 - 计算合适的大小和位置
-                for img_id in image_ids[:1]:  # 只放第一张图片
+                # 添加图片
+                for img_id in image_ids[:1]:
                     if img_id in image_map:
                         img_path = image_map[img_id]["path"]
                         try:
-                            # 使用PIL获取图片尺寸
                             from PIL import Image as PILImage
                             with PILImage.open(img_path) as img:
                                 img_w, img_h = img.size
                                 aspect_ratio = img_w / img_h
 
-                            # 计算合适的尺寸（确保在img_max_width和img_max_height范围内）
-                            available_width = img_max_width
-                            available_height = img_max_height
-
-                            # 使用浮点数计算比例
-                            avail_w_in = available_width / 914400  # 转换为英寸
-                            avail_h_in = available_height / 914400
+                            avail_w_in = img_max_width / 914400
+                            avail_h_in = img_max_height / 914400
 
                             if aspect_ratio > 1:
-                                # 横版图片：按宽度缩放
-                                final_width = available_width
+                                final_width = img_max_width
                                 final_height = int(avail_w_in / aspect_ratio * 914400)
-                                if final_height > available_height:
-                                    final_height = available_height
+                                if final_height > img_max_height:
+                                    final_height = img_max_height
                                     final_width = int(avail_h_in * aspect_ratio * 914400)
                             else:
-                                # 竖版图片：按高度缩放
-                                final_height = available_height
+                                final_height = img_max_height
                                 final_width = int(avail_h_in * aspect_ratio * 914400)
-                                if final_width > available_width:
-                                    final_width = available_width
+                                if final_width > img_max_width:
+                                    final_width = img_max_width
                                     final_height = int(avail_w_in / aspect_ratio * 914400)
 
-                            # 居中放置图片
                             img_left_final = img_left + (img_max_width - final_width) // 2
                             img_top_final = img_top + (img_max_height - final_height) // 2
 
@@ -656,11 +723,9 @@ def generate_pptx_with_images(extracted_data: Dict, slides_data: list, output_pa
                 text_frame = ppt_slide.shapes.add_textbox(text_left, text_top, text_width, text_height)
                 tf = text_frame.text_frame
                 tf.word_wrap = True
-
                 add_formatted_content(tf, content, TEXT_COLOR)
 
-    # 保存
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    # 5. 保存
     prs.save(output_path)
 
     if progress_callback:
