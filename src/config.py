@@ -54,6 +54,12 @@ EDGE_VOICE = os.getenv("EDGE_VOICE", "zh-CN-XiaoxiaoNeural")
 COSYVOICE_SPEAKER = os.getenv("COSYVOICE_SPEAKER", "中文女")
 COSYVOICE_MODE = os.getenv("COSYVOICE_MODE", "sft")  # sft, naive, pretrained
 
+# PPT 生成模式
+PPT_GENERATION_MODE = os.getenv("PPT_GENERATION_MODE", "basic")
+# "basic"  = original python-pptx (text-only path)
+# "template" = template-copy from src/模板1.pptx (multimodal path)
+# "ppt-master" = SVG → native DrawingML via ppt-master
+
 # PPT 配置
 PPT_TEMPLATE_STYLE = {
     "title_bg_color": (31, 78, 120),  # 深蓝色

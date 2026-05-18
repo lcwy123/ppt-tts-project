@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Optional, Dict
 
-from src.config import OUTPUT_OUTLINE, OUTPUT_PPT, PPT_TEMPLATE_STYLE
+from src.config import OUTPUT_OUTLINE, OUTPUT_PPT, PPT_TEMPLATE_STYLE, PPT_GENERATION_MODE
 
 
 def generate_pptx_basic(outline_path: str, output_path: str, progress_callback=None) -> str:
@@ -153,17 +153,26 @@ def generate_pptx_basic(outline_path: str, output_path: str, progress_callback=N
     return output_path
 
 
-def run(outline_path: Optional[str] = None, progress_callback=None) -> str:
+def run(outline_path: Optional[str] = None, progress_callback=None, mode: Optional[str] = None) -> str:
     """
     运行PPT生成
 
     Args:
         outline_path: 提纲文件路径，默认使用配置中的路径
         progress_callback: 进度回调函数
+        mode: PPT生成模式 ("basic", "template", "ppt-master")，默认使用PPT_GENERATION_MODE
 
     Returns:
         生成的PPTX文件路径
     """
+    if mode is None:
+        mode = PPT_GENERATION_MODE
+
+    if mode == "ppt-master":
+        from src.ppt_master_generator import run_ppt_master
+        return run_ppt_master(outline_path, progress_callback)
+
+    # basic mode (original)
     if outline_path is None:
         outline_path = str(OUTPUT_OUTLINE)
 
@@ -174,17 +183,26 @@ def run(outline_path: Optional[str] = None, progress_callback=None) -> str:
     return generate_pptx_basic(outline_path, output_path, progress_callback)
 
 
-def run_multimodal(docx_path: str, progress_callback=None) -> str:
+def run_multimodal(docx_path: str, progress_callback=None, mode: Optional[str] = None) -> str:
     """
     从Word文档生成多模态PPT（支持图片和表格）
 
     Args:
         docx_path: Word文档路径
         progress_callback: 进度回调函数
+        mode: PPT生成模式 ("template", "ppt-master")，默认使用PPT_GENERATION_MODE
 
     Returns:
         生成的PPTX文件路径
     """
+    if mode is None:
+        mode = PPT_GENERATION_MODE
+
+    if mode == "ppt-master":
+        from src.ppt_master_generator import run_ppt_master_multimodal
+        return run_ppt_master_multimodal(docx_path, progress_callback)
+
+    # template mode (original)
     from src.docx_extractor import extract_from_docx
     from src.multimodal_outline_generator import run as run_multimodal_outline
 

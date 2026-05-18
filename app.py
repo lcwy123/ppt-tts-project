@@ -29,7 +29,7 @@ from src.config import (
     LLM_MODE, TTS_MODE, LOCAL_LLM_URL, LOCAL_LLM_MODEL,
     MINIMAX_API_KEY, MINIMAX_MODEL, INPUT_DIR, OUTPUT_DIR, AUDIO_DIR,
     OUTPUT_OUTLINE, OUTPUT_PPT, OUTPUT_SLIDES_TEXT, OUTPUT_NARRATION,
-    OUTPUT_AUDIO_DURATIONS, OUTPUT_FINAL_PPT
+    OUTPUT_AUDIO_DURATIONS, OUTPUT_FINAL_PPT, PPT_GENERATION_MODE
 )
 from src.backup import list_backups
 from src import run_outline, run_ppt, run_multimodal, run_extract, run_narration, run_audio, run_embed
@@ -56,10 +56,10 @@ def get_runner():
 
 
 def start_pipeline(input_text, llm_mode, local_llm_url, local_llm_model,
-                   minimax_api_key, minimax_model, tts_mode, input_docx=None):
+                   minimax_api_key, minimax_model, tts_mode, input_docx=None, ppt_mode=None):
     """启动流水线"""
     global runner
-    logger.info(f"start_pipeline called: llm_mode={llm_mode}, tts_mode={tts_mode}, input_docx={input_docx}")
+    logger.info(f"start_pipeline called: llm_mode={llm_mode}, tts_mode={tts_mode}, ppt_mode={ppt_mode}, input_docx={input_docx}")
 
     with runner_lock:
         runner = PipelineRunner()
@@ -74,7 +74,8 @@ def start_pipeline(input_text, llm_mode, local_llm_url, local_llm_model,
                 current_runner.run_full_pipeline(
                     input_text=input_text if input_text and input_text.strip() else None,
                     tts_mode=tts_mode,
-                    input_docx=input_docx
+                    input_docx=input_docx,
+                    ppt_mode=ppt_mode,
                 )
                 logger.info("流水线执行完成")
             except Exception as e:
@@ -86,7 +87,7 @@ def start_pipeline(input_text, llm_mode, local_llm_url, local_llm_model,
     return "🚀 流水线已启动..."
 
 
-def run_step_ppt_multimodal(input_docx, progress_callback=None):
+def run_step_ppt_multimodal(input_docx, progress_callback=None, ppt_mode=None):
     """步骤2: 多模态模式生成PPT（从Word文档）"""
     r = _get_or_create_runner()
     r._current_step = "PPT生成"
@@ -98,12 +99,12 @@ def run_step_ppt_multimodal(input_docx, progress_callback=None):
             return
 
         r._log("="*50)
-        r._log("步骤2: 多模态PPT生成")
+        r._log(f"步骤2: 多模态PPT生成 (模式: {ppt_mode or PPT_GENERATION_MODE})")
         r._log("="*50)
         r._log(f"输入文档: {input_docx}")
 
         try:
-            run_multimodal(input_docx, progress_callback=r._progress_callback)
+            run_multimodal(input_docx, progress_callback=r._progress_callback, mode=ppt_mode)
             with step_status_lock:
                 step_status["ppt"] = True
             r._log("="*50)
@@ -255,7 +256,7 @@ def run_step_outline(input_text, llm_mode, local_llm_url, local_llm_model,
     return "步骤1(生成提纲)已启动..."
 
 
-def run_step_ppt():
+def run_step_ppt(ppt_mode=None):
     """步骤2: 生成PPT"""
     r = _get_or_create_runner()
     r._current_step = "PPT生成"
@@ -266,9 +267,9 @@ def run_step_ppt():
             r._log("⚠ 警告: ppt_outline.docx 不存在，步骤2可能失败")
         try:
             r._log("="*50)
-            r._log("步骤2: 生成PPT")
+            r._log(f"步骤2: 生成PPT (模式: {ppt_mode or PPT_GENERATION_MODE})")
             r._log("="*50)
-            run_ppt(progress_callback=r._progress_callback)
+            run_ppt(progress_callback=r._progress_callback, mode=ppt_mode)
             with step_status_lock:
                 step_status["ppt"] = True
             r._log("✓ 步骤2完成")
@@ -528,8 +529,20 @@ def main(port=7860):
                 label="TTS模式"
             )
             gr.Markdown("""
-            **CosyVoice**: 本地TTS，需要下载模型  
+            **CosyVoice**: 本地TTS，需要下载模型
             **Edge**: 微软Edge TTS，需要联网
+            """)
+
+            gr.Markdown("### PPT 生成方式")
+            ppt_mode_radio = gr.Radio(
+                ["basic", "template", "ppt-master"],
+                value=PPT_GENERATION_MODE,
+                label="PPT生成模式"
+            )
+            gr.Markdown("""
+            **basic**: 原始python-pptx方式，纯文字PPT
+            **template**: 基于模板复制方式，支持图片和表格
+            **ppt-master**: AI设计SVG → 原生PowerPoint形状（实验性，需联网LLM）
             """)
         
         # Tab 2: 输入
@@ -632,7 +645,7 @@ def main(port=7860):
                     minimax_api_key, minimax_model],
             outputs=status_text
         )
-        btn_step2.click(fn=run_step_ppt, inputs=[], outputs=status_text)
+        btn_step2.click(fn=run_step_ppt, inputs=[ppt_mode_radio], outputs=status_text)
         btn_step3.click(fn=run_step_extract, inputs=[], outputs=status_text)
         btn_step4.click(fn=run_step_narration, inputs=[], outputs=status_text)
         btn_step5.click(fn=run_step_audio, inputs=[tts_mode_radio], outputs=status_text)
@@ -642,12 +655,12 @@ def main(port=7860):
         start_btn.click(
             fn=start_pipeline,
             inputs=[input_text, llm_mode_radio, local_llm_url, local_llm_model,
-                   minimax_api_key, minimax_model, tts_mode_radio, input_docx],
+                   minimax_api_key, minimax_model, tts_mode_radio, input_docx, ppt_mode_radio],
             outputs=status_text
         )
         btn_step2_multimodal.click(
             fn=run_step_ppt_multimodal,
-            inputs=[input_docx],
+            inputs=[input_docx, ppt_mode_radio],
             outputs=status_text
         )
         logger.info("  - start_btn 绑定完成")

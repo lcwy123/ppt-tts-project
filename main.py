@@ -19,7 +19,7 @@ from src import (
     run_outline, run_ppt, run_multimodal, run_extract, run_narration, run_audio, run_embed,
     backup_old_output, list_backups
 )
-from src.config import LLM_MODE, TTS_MODE
+from src.config import LLM_MODE, TTS_MODE, PPT_GENERATION_MODE
 
 
 class PipelineRunner:
@@ -73,13 +73,14 @@ class PipelineRunner:
         if self._is_paused:
             self._pause_event.wait()
 
-    def run_full_pipeline(self, input_text=None, tts_mode=None, input_docx=None):
+    def run_full_pipeline(self, input_text=None, tts_mode=None, input_docx=None, ppt_mode=None):
         """运行完整流程
 
         Args:
             input_text: 文本输入
             tts_mode: TTS模式
             input_docx: Word文档路径（多模态模式）
+            ppt_mode: PPT生成模式 ("basic", "template", "ppt-master")
         """
         try:
             # 0. 备份
@@ -102,7 +103,7 @@ class PipelineRunner:
                 self._log("\n" + "="*50)
                 self._log("检测到Word文档输入，使用多模态模式")
                 self._log("="*50)
-                run_multimodal(input_docx, progress_callback=self._progress_callback)
+                run_multimodal(input_docx, progress_callback=self._progress_callback, mode=ppt_mode)
             else:
                 # 文本模式：生成提纲然后PPT
                 self._current_step = "提纲生成"
@@ -122,7 +123,7 @@ class PipelineRunner:
                 self._log("\n" + "="*50)
                 self._log("步骤2: 生成PPT")
                 self._log("="*50)
-                run_ppt(progress_callback=self._progress_callback)
+                run_ppt(progress_callback=self._progress_callback, mode=ppt_mode)
 
             if self._stop_event.is_set():
                 self._log("⏹ 已停止")
@@ -197,6 +198,9 @@ def main():
     parser.add_argument("--input", "-i", type=str, help="输入文本文件路径")
     parser.add_argument("--input-docx", "-d", type=str, help="输入Word文档路径（支持多模态：图片、表格）")
     parser.add_argument("--tts-mode", type=str, default=None, help="TTS模式: cosyvoice, edge, api")
+    parser.add_argument("--ppt-mode", type=str, default=None,
+                       choices=["basic", "template", "ppt-master"],
+                       help="PPT生成方式: basic(原始), template(模板复制), ppt-master(SVG→原生形状)")
     args, unknown = parser.parse_known_args()
 
     if args.webui:
@@ -206,14 +210,15 @@ def main():
         # 将参数传递给 run_cli
         import sys
         sys.argv = [sys.argv[0]] + unknown
-        run_cli(args.input, args.tts_mode, args.input_docx)
+        run_cli(args.input, args.tts_mode, args.input_docx, args.ppt_mode)
 
 
-def run_cli(input_text=None, tts_mode=None, input_docx=None):
+def run_cli(input_text=None, tts_mode=None, input_docx=None, ppt_mode=None):
     """命令行模式"""
     print("PPT-TTS-Project")
     print(f"LLM模式: {LLM_MODE}")
     print(f"TTS模式: {tts_mode or TTS_MODE}")
+    print(f"PPT模式: {ppt_mode or PPT_GENERATION_MODE}")
     print()
 
     runner = PipelineRunner()
@@ -239,7 +244,8 @@ def run_cli(input_text=None, tts_mode=None, input_docx=None):
     runner.run_full_pipeline(
         input_text=input_text_value,
         tts_mode=tts_mode,
-        input_docx=input_docx
+        input_docx=input_docx,
+        ppt_mode=ppt_mode,
     )
 
 
