@@ -31,16 +31,60 @@ SVG_CONVENTIONS = """SVG requirements for native PowerPoint conversion:
 - Group logical regions with <g id="...">
 - Text MUST use <text> elements with font-family="sans-serif"
 - Use hex colors (#RRGGBB) or rgb() for all fills and strokes
-- Keep text within safe margins (80px from edges)
 - No <foreignObject>, no CSS @import, no JavaScript
 - No <use> elements referencing external files
 - Icons expressed as simple <path> or <circle>/<rect> shapes
-- Output ONLY raw SVG code, no markdown code fences, no explanation"""
+- Output ONLY raw SVG code, no markdown code fences, no explanation
+
+LAYOUT GRID (1280x720 canvas):
+- TITLE ZONE: y=40 to y=130 (slide title, decorative accent bar)
+- CONTENT ZONE: y=140 to y=640 (bullet points, images, tables, diagrams)
+- FOOTER ZONE: y=650 to y=710 (page number, source line, small text)
+- Left margin: x=60, Right margin: x=1220
+- Text column (left): x=60-600. Graphics column (right): x=660-1220
+
+COLLISION AVOIDANCE:
+- Minimum 24px vertical gap between all text elements
+- Minimum 20px horizontal gap between adjacent columns
+- Background decorations (rects, circles behind text) must have 16px padding inside text bounds
+- No two visible elements may share the same (x, y, width, height) region
+- If content exceeds available height, reduce font size rather than overlapping
+- Images must not overlap with text; place images beside (right column) or below text blocks
+
+Z-ORDER (draw order in SVG, first=bottom, last=top):
+- Layer 1 (bottom): Background fills, gradients, decorative large shapes
+- Layer 2: Section dividers, accent bars, decorative lines
+- Layer 3: Images, diagrams, tables
+- Layer 4 (top): All text elements — must NEVER be obscured by other layers
+
+TEXT RULES:
+- Title font-size: 36-48px, bold, placed in TITLE ZONE
+- Section heading font-size: 24-30px, bold
+- Body text font-size: 18-22px, line spacing dy=28-32px
+- Bullet text font-size: 16-20px
+- Footer font-size: 14px, centered at y=690
+- Max 5 bullet points per slide
+- Text width limit: if text exceeds 560px, split into multiple <tspan> lines or truncate with ...
+- Long words (over 40 chars): abbreviate or hyphenate
+- text-anchor="start" for left-aligned, text-anchor="middle" for centered text"""
 
 
-def _svg_prompt_raw(slide_title, slide_content, page_num, total_pages, color_scheme=None):
+def _get_image_dimensions(image_path):
+    """Return (width, height) in pixels for an image file, or (None, None) on failure."""
+    try:
+        from PIL import Image as PILImage
+        with PILImage.open(image_path) as img:
+            return img.size
+    except Exception:
+        return None, None
+
+
+def _svg_prompt_raw(slide_title, slide_content, page_num, total_pages,
+                    images=None, tables=None, color_scheme=None):
     """Build the LLM prompt for generating a slide SVG from raw (unsimplified) content.
     The LLM is instructed to first simplify the content, then design the SVG.
+    images: list of absolute paths to image files available for this slide
+    tables: list of table data (list of rows, each row a list of cell strings)
     """
     if color_scheme is None:
         color_scheme = {
@@ -63,6 +107,86 @@ def _svg_prompt_raw(slide_title, slide_content, page_num, total_pages, color_sch
             "matching the cover style."
         )
 
+    cover_template = ""
+    if page_num == 1:
+        subtitle_text = slide_content.strip()[:50] if slide_content and slide_content.strip() else ""
+        cover_template = f"""COVER LAYOUT:
+<rect width="1280" height="720" fill="{color_scheme['primary']}"/>
+<text x="640" y="310" font-size="52" font-weight="bold" fill="#FFFFFF" text-anchor="middle">{slide_title}</text>
+<rect x="490" y="340" width="300" height="4" fill="{color_scheme['accent']}"/>
+<text x="640" y="420" font-size="22" fill="rgba(255,255,255,0.85)" text-anchor="middle">{subtitle_text}</text>
+"""
+
+    # --- Image instructions ---
+    image_block = ""
+    if images:
+        # Limit to max 6 images per slide to keep prompt manageable
+        selected_images = images[:6]
+        img_lines = []
+        for img_path in selected_images:
+            w, h = _get_image_dimensions(img_path)
+            if w and h:
+                # Suggest scaled dimensions to fit right column (max 560x520)
+                scale = min(560 / w, 520 / h, 1.0)
+                sw, sh = int(w * scale), int(h * scale)
+                img_lines.append(
+                    f"  <image href='{img_path}' x='660' y='...' "
+                    f"width='{sw}' height='{sh}' "
+                    f"preserveAspectRatio='xMidYMid meet'/> "
+                    f"(natural {w}x{h}px, suggested render {sw}x{sh}px)"
+                )
+            else:
+                img_lines.append(
+                    f"  <image href='{img_path}' x='660' y='...' "
+                    f"width='500' height='375' "
+                    f"preserveAspectRatio='xMidYMid meet'/>"
+                )
+        image_block = f"""
+IMAGES TO INCLUDE ON THIS SLIDE:
+{chr(10).join(img_lines)}
+
+IMAGE PLACEMENT RULES:
+- You MUST include at least some of these images (pick 1-4 that best illustrate the content)
+- Use the EXACT href path shown above (absolute path, copy verbatim)
+- Place in right column: x=660-1220, below the title area at y=180+
+- Stack multiple images vertically with 24px gap between them
+- Images are read-only references — keep preserveAspectRatio='xMidYMid meet'
+- Keep 20px padding between images and slide edges or text
+"""
+
+    # --- Table instructions ---
+    table_block = ""
+    if tables:
+        for ti, table_data in enumerate(tables):
+            if not table_data:
+                continue
+            rows = len(table_data)
+            cols = max(len(row) for row in table_data) if table_data else 0
+            display_rows = min(rows, 5)
+            display_cols = min(cols, 6)
+            preview_lines = []
+            for row in table_data[:display_rows]:
+                cells = [str(cell)[:15] for cell in row[:display_cols]]
+                preview_lines.append(" | ".join(cells))
+            table_preview = "\n".join(preview_lines)
+            table_block += f"""
+TABLE {ti+1} ({display_rows}x{display_cols}, total {rows}x{cols}):
+{table_preview}
+"""
+
+    if table_block:
+        table_block = f"""
+TABLES TO RENDER ON THIS SLIDE:{table_block}
+TABLE RENDERING RULES:
+- Render each table as SVG shapes (NOT as <image>): use <rect> for cell backgrounds, <line> or <path> for grid lines, <text> for cell text
+- Table width: max 800px, place in the right column or centered below text
+- Header row: {color_scheme['primary']} background with white bold text (font-size 15px)
+- Data rows: alternating #F5F5F5 and #FFFFFF backgrounds, text font-size 14px
+- Cell padding: 8px horizontal, 4px vertical; row height 28px
+- Grid lines: 0.5px stroke, color #CCCCCC
+- Truncate cell text to 15 characters per cell, use title for full text
+"""
+
     return f"""You are an expert PowerPoint designer. Create one SVG slide.
 
 First, distill the raw content below into 3-5 key bullet points (each under 20 Chinese characters). Then design a professional SVG slide presenting the distilled points.
@@ -74,12 +198,25 @@ TITLE: {slide_title}
 
 RAW CONTENT (simplify to 3-5 bullets before designing):
 {slide_content[:2000]}
-
+{image_block}{table_block}
 DESIGN RULES:
 - Primary: {color_scheme['primary']} | Accent: {color_scheme['accent']} | BG: {color_scheme['bg']} | Text: {color_scheme['text']}
 - Professional modern style, generous whitespace, large readable fonts
 - Title at top with accent bar or primary color block
 {'- Dark background, title centered vertically' if page_num == 1 else ''}
+{cover_template}
+
+STRUCTURED LAYOUT (follow this structure precisely):
+<svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg">
+  <!-- Layer 1: Background -->
+  <rect width="1280" height="720" fill="{color_scheme['bg']}"/>
+  <!-- Layer 2: Decorative (accent bar at y=130, subtle corner shapes) -->
+  <!-- Layer 3: Images / tables / diagrams (right column x=660-1220) -->
+  <!-- Layer 4: Title text in TITLE ZONE (y=60-100, x=60, font-size 36-40) -->
+  <!-- Layer 5: Content bullet points in CONTENT ZONE (y=170-580, x=60) -->
+  <!-- Layer 6: Footer page number at y=690 centered -->
+</svg>
+
 {SVG_CONVENTIONS}
 
 Output ONLY the raw SVG code, no markdown fences, no explanation."""
@@ -282,6 +419,50 @@ def _safe_name(text):
 
 
 # ---------------------------------------------------------------------------
+#  SVG layout validation
+# ---------------------------------------------------------------------------
+
+
+def _validate_svg_layout(svg_text, slide_num):
+    """Check SVG for obvious layout issues. Returns list of warning strings (max 3)."""
+    import re
+    warnings = []
+
+    if not svg_text.strip().startswith('<svg') and not svg_text.strip().startswith('<?xml'):
+        warnings.append(f"Slide {slide_num}: SVG does not start with <svg>")
+        return warnings
+
+    vb_match = re.search(r'viewBox\s*=\s*["\']?0\s+0\s+(\d+)(?:\.\d+)?\s+(\d+)(?:\.\d+)?["\']?', svg_text)
+    if vb_match:
+        w, h = int(vb_match.group(1)), int(vb_match.group(2))
+        if w != 1280 or h != 720:
+            warnings.append(f"Slide {slide_num}: viewBox is {w}x{h}, expected 1280x720")
+
+    # Strip <defs> blocks — they contain non-rendered template text
+    clean_svg = re.sub(r'<defs\b[^>]*>.*?</defs>', '', svg_text, flags=re.DOTALL)
+    text_positions = re.findall(
+        r'<text\b[^>]*?\sx\s*=\s*["\']([\d.]+)["\'][^>]*?\sy\s*=\s*["\']([\d.]+)["\']',
+        clean_svg
+    )
+
+    outlier_count = 0
+    for x_str, y_str in text_positions:
+        x, y = float(x_str), float(y_str)
+        if x < 20 or x > 1260:
+            outlier_count += 1
+        if y < 20 or y > 700:
+            outlier_count += 1
+
+    if outlier_count > len(text_positions) * 0.5 and text_positions:
+        warnings.append(
+            f"Slide {slide_num}: {outlier_count}/{len(text_positions)} text elements "
+            f"outside generous safe area — possible layout issue"
+        )
+
+    return warnings[:3]
+
+
+# ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
 
@@ -373,12 +554,15 @@ def run_ppt_master_multimodal(docx_path=None, progress_callback=None):
         progress_callback("构建PPT页面结构...")
     slides_data = build_slides_from_extracted(extracted_data)
 
-    # 3. Convert to prompt items with raw content
+    # 3. Convert to prompt items with raw content (preserve images and tables)
     slide_items = []
     for sd in slides_data:
         slide_items.append({
             "title": sd.get("title", ""),
             "content": sd.get("content", ""),
+            "images": sd.get("images", []),
+            "tables": sd.get("tables", []),
+            "is_cover": sd.get("is_cover", False),
         })
 
     if progress_callback:
@@ -387,7 +571,7 @@ def run_ppt_master_multimodal(docx_path=None, progress_callback=None):
     # 4. Generate SVGs (inline simplification + design in one LLM call per slide)
     with tempfile.TemporaryDirectory(prefix="ppt_master_mm_") as work_dir:
         work_path = Path(work_dir)
-        svg_files = _generate_svgs_raw(slide_items, work_path, progress_callback)
+        svg_files = _generate_svgs_raw(slide_items, work_path, extracted_data, progress_callback)
 
         if not svg_files:
             raise RuntimeError("没有成功生成任何SVG页面")
@@ -416,8 +600,10 @@ def run_ppt_master_multimodal(docx_path=None, progress_callback=None):
     return str(output_path)
 
 
-def _generate_svgs_raw(slide_items, work_dir, progress_callback=None):
+def _generate_svgs_raw(slide_items, work_dir, extracted_data=None, progress_callback=None):
     """Generate SVG for each slide using raw-content prompt (simplification inline)."""
+    from src.docx_extractor import get_image_by_id, get_table_by_id
+
     svg_files = []
     total = len(slide_items)
 
@@ -425,11 +611,36 @@ def _generate_svgs_raw(slide_items, work_dir, progress_callback=None):
         page_num = i + 1
         title = item.get("title", f"Slide {page_num}")
         content = item.get("content", "")
+        image_ids = item.get("images", [])
+        table_ids = item.get("tables", [])
+        is_cover = item.get("is_cover", False)
+
+        # Resolve image paths from extracted_data
+        image_paths = []
+        if extracted_data and image_ids:
+            for img_id in image_ids:
+                img_info = get_image_by_id(extracted_data, img_id)
+                if img_info and os.path.exists(img_info["path"]):
+                    image_paths.append(img_info["path"])
+
+        # Resolve table data from extracted_data
+        tables_for_slide = []
+        if extracted_data and table_ids:
+            for tbl_id in table_ids:
+                tbl_info = get_table_by_id(extracted_data, tbl_id)
+                if tbl_info and tbl_info.get("data"):
+                    tables_for_slide.append(tbl_info["data"])
 
         if progress_callback:
-            progress_callback(f"AI 设计第 {page_num}/{total} 页: {title[:40]}...")
+            extra = ""
+            if image_paths:
+                extra += f" [图片:{len(image_paths)}张]"
+            if tables_for_slide:
+                extra += f" [表格:{len(tables_for_slide)}个]"
+            progress_callback(f"AI 设计第 {page_num}/{total} 页: {title[:40]}...{extra}")
 
-        prompt = _svg_prompt_raw(title, content, page_num, total)
+        prompt = _svg_prompt_raw(title, content, page_num, total,
+                                 images=image_paths, tables=tables_for_slide)
         svg_text = _call_llm_for_svg(prompt, progress_callback)
 
         if svg_text:
@@ -438,6 +649,11 @@ def _generate_svgs_raw(slide_items, work_dir, progress_callback=None):
             svg_files.append(svg_path)
             if progress_callback:
                 progress_callback(f"  ✓ 第 {page_num} 页完成")
+            # Layout validation (non-blocking)
+            layout_warnings = _validate_svg_layout(svg_text, page_num)
+            for w in layout_warnings:
+                if progress_callback:
+                    progress_callback(f"  ⚠ {w}")
         else:
             if progress_callback:
                 progress_callback(f"  ✗ 第 {page_num} 页失败，跳过")

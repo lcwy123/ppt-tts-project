@@ -53,9 +53,9 @@ def load_narrations(file_path):
     return narrations
 
 
-def generate_audio_cosyvoice(text, output_path, progress_callback=None):
+def generate_audio_cosyvoice(text, output_path, progress_callback=None, speaker=None):
     """使用本地CosyVoice生成音频"""
-    
+
     try:
         import sys
         cosyvoice_root = str(Path(__file__).parent.parent / "CosyVoice")
@@ -63,17 +63,17 @@ def generate_audio_cosyvoice(text, output_path, progress_callback=None):
         sys.path.insert(0, matcha_root)
         sys.path.insert(0, cosyvoice_root)
         from cosyvoice.cli.cosyvoice import CosyVoice
-        
+
         if progress_callback:
             progress_callback(f"加载CosyVoice模型...")
-        
+
         cosyvoice = CosyVoice(str(COSYVOICE_DIR))
-        
+
         if progress_callback:
-            progress_callback(f"正在生成音频...")
-        
+            progress_callback(f"正在生成音频 (音色: {speaker or COSYVOICE_SPEAKER})...")
+
         # 生成音频
-        output = cosyvoice.inference_sft(text, COSYVOICE_SPEAKER)
+        output = cosyvoice.inference_sft(text, speaker or COSYVOICE_SPEAKER)
 
         # CosyVoice returns a generator, iterate to get result
         for item in output:
@@ -95,14 +95,14 @@ def generate_audio_cosyvoice(text, output_path, progress_callback=None):
         return False
 
 
-def generate_audio_edge(text, output_path, progress_callback=None):
+def generate_audio_edge(text, output_path, progress_callback=None, voice=None):
     """使用微软Edge TTS生成音频"""
-    
+
     try:
         import edge_tts
-        
+
         async def generate():
-            communicate = edge_tts.Communicate(text, EDGE_VOICE)
+            communicate = edge_tts.Communicate(text, voice or EDGE_VOICE)
             await communicate.save(output_path)
         
         asyncio.run(generate())
@@ -128,8 +128,15 @@ def get_audio_duration(audio_path):
         return 0
 
 
-def run(narration_path=None, tts_mode=None, progress_callback=None):
-    """运行完整流程：生成音频"""
+def run(narration_path=None, tts_mode=None, progress_callback=None, tts_voice=None):
+    """运行完整流程：生成音频
+
+    Args:
+        narration_path: 解说词文件路径
+        tts_mode: TTS模式 (cosyvoice, edge)
+        progress_callback: 进度回调
+        tts_voice: 音色/CosyVoice speaker 或 Edge voice short name
+    """
     
     if narration_path is None:
         narration_path = OUTPUT_NARRATION
@@ -165,9 +172,9 @@ def run(narration_path=None, tts_mode=None, progress_callback=None):
         success = False
         
         if tts_mode == "cosyvoice":
-            success = generate_audio_cosyvoice(text, str(audio_path), progress_callback)
+            success = generate_audio_cosyvoice(text, str(audio_path), progress_callback, speaker=tts_voice)
         elif tts_mode == "edge":
-            success = generate_audio_edge(text, str(audio_path), progress_callback)
+            success = generate_audio_edge(text, str(audio_path), progress_callback, voice=tts_voice)
         else:
             # API模式暂未实现
             if progress_callback:

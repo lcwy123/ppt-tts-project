@@ -6,6 +6,7 @@ import io
 import math
 import re
 import base64
+from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -1551,11 +1552,20 @@ def convert_image(elem: ET.Element, ctx: ConvertContext) -> ShapeResult | None:
     else:
         if ctx.svg_dir is None:
             return None
-        img_path = ctx.svg_dir / href
+        # Resolve the image path: handle both relative and absolute hrefs
+        href_path = Path(href)
+        if href_path.is_absolute():
+            img_path = href_path
+        else:
+            img_path = ctx.svg_dir / href
+            if not img_path.exists():
+                img_path = ctx.svg_dir.parent / href
         if not img_path.exists():
-            img_path = ctx.svg_dir.parent / href
-        if not img_path.exists():
-            raise FileNotFoundError(f'External image not found: {href}')
+            import logging
+            logging.getLogger(__name__).warning(
+                "External image not found, skipping: %s", href
+            )
+            return None
         img_format = img_path.suffix.lstrip('.').lower()
         if img_format == 'jpeg':
             img_format = 'jpg'
@@ -1752,11 +1762,20 @@ def convert_nested_svg(elem: ET.Element, ctx: ConvertContext) -> ShapeResult | N
     else:
         if ctx.svg_dir is None:
             return None
-        img_path = ctx.svg_dir / href
+        # Resolve the image path: handle both relative and absolute hrefs
+        href_path = Path(href)
+        if href_path.is_absolute():
+            img_path = href_path
+        else:
+            img_path = ctx.svg_dir / href
+            if not img_path.exists():
+                img_path = ctx.svg_dir.parent / href
         if not img_path.exists():
-            img_path = ctx.svg_dir.parent / href
-        if not img_path.exists():
-            raise FileNotFoundError(f'External image not found: {href}')
+            import logging
+            logging.getLogger(__name__).warning(
+                "External image not found, skipping: %s", href
+            )
+            return None
         img_format = img_path.suffix.lstrip('.').lower()
         if img_format == 'jpeg':
             img_format = 'jpg'

@@ -40,6 +40,9 @@ class DocxExtractor:
         self.tables: List[Dict] = []
         self.content_blocks: List[Dict] = []
 
+        # 去重：已处理过的 embed 关系ID
+        self._seen_embeds: set = set()
+
         # 当前标题上下文
         self._current_h1 = None
         self._current_h2 = None
@@ -49,8 +52,19 @@ class DocxExtractor:
         # 待处理的图片（还未确定归属的）
         self._pending_images: List[str] = []
 
+    def _clean_extracted_dir(self):
+        """清空提取目录，避免上次运行的残留文件混入。"""
+        if self.images_dir.exists():
+            for f in self.images_dir.iterdir():
+                f.unlink()
+        if self.tables_dir.exists():
+            for f in self.tables_dir.iterdir():
+                f.unlink()
+
     def extract_all(self, progress_callback=None) -> Dict[str, Any]:
         """提取Word文档的所有内容"""
+        self._clean_extracted_dir()
+
         if progress_callback:
             progress_callback("开始解析Word文档...")
 
@@ -81,14 +95,53 @@ class DocxExtractor:
         }
 
     def _extract_title(self) -> str:
-        """提取文档标题"""
+        """提取文档标题，优先级：
+        1. docx core properties (dc:title)
+        2. Title 样式段落
+        3. 第一个章节标题之前的首个非空段落
+        4. 第一个章节标题段落
+        5. 第一个非空段落
+        6. 文件名 stem
+        """
+        # Priority 1: Docx core properties title
+        try:
+            core_title = self.doc.core_properties.title
+            if core_title and core_title.strip():
+                return core_title.strip()
+        except Exception:
+            pass
+
+        # Priority 2: Title-styled paragraph
         for para in self.doc.paragraphs:
-            if para.style.name.startswith('Heading') or '章标题' in para.style.name:
+            if para.style.name == 'Title' and para.text.strip():
                 return para.text.strip()
+
+        def _is_heading_style(style_name):
+            return (style_name.startswith('Heading')
+                    or '章标题' in style_name
+                    or '条标题' in style_name
+                    or style_name == 'Title')
+
+        # Priority 3: First non-empty paragraph BEFORE any heading
+        for para in self.doc.paragraphs:
+            text = para.text.strip()
+            if _is_heading_style(para.style.name):
+                break
+            if text:
+                return text
+
+        # Priority 4: First heading paragraph
+        for para in self.doc.paragraphs:
+            if _is_heading_style(para.style.name) and para.text.strip():
+                return para.text.strip()
+
+        # Priority 5: First non-empty paragraph (anywhere)
         for para in self.doc.paragraphs:
             text = para.text.strip()
             if text:
                 return text
+
+        # Priority 6: Filename stem
         return self.docx_path.stem
 
     def _get_heading_level(self, style_name: str) -> Optional[int]:
@@ -188,7 +241,8 @@ class DocxExtractor:
                         child_tag = child.tag if isinstance(child.tag, str) else ''
                         if 'blip' in child_tag.lower():
                             embed = child.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
-                            if embed and embed in self.doc.part.rels:
+                            if embed and embed in self.doc.part.rels and embed not in self._seen_embeds:
+                                self._seen_embeds.add(embed)
                                 try:
                                     image_idx += 1
                                     img_id = f"img_{image_idx:03d}"

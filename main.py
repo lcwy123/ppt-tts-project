@@ -51,14 +51,14 @@ class PipelineRunner:
         """暂停执行"""
         if not self._is_paused:
             self._is_paused = True
-            self._pause_event.set()
+            self._pause_event.clear()
             self._log("⏸ 已暂停")
 
     def resume(self):
         """继续执行"""
         if self._is_paused:
             self._is_paused = False
-            self._pause_event.clear()
+            self._pause_event.set()
             self._log("▶ 继续执行")
 
     def is_paused(self):
@@ -73,7 +73,7 @@ class PipelineRunner:
         if self._is_paused:
             self._pause_event.wait()
 
-    def run_full_pipeline(self, input_text=None, tts_mode=None, input_docx=None, ppt_mode=None):
+    def run_full_pipeline(self, input_text=None, tts_mode=None, input_docx=None, ppt_mode=None, tts_voice=None):
         """运行完整流程
 
         Args:
@@ -81,6 +81,7 @@ class PipelineRunner:
             tts_mode: TTS模式
             input_docx: Word文档路径（多模态模式）
             ppt_mode: PPT生成模式 ("basic", "template", "ppt-master")
+            tts_voice: TTS音色
         """
         try:
             # 0. 备份
@@ -162,7 +163,7 @@ class PipelineRunner:
             self._log("\n" + "="*50)
             self._log("步骤5: 生成音频")
             self._log("="*50)
-            run_audio(tts_mode=tts_mode, progress_callback=self._progress_callback)
+            run_audio(tts_mode=tts_mode, progress_callback=self._progress_callback, tts_voice=tts_voice)
 
             if self._stop_event.is_set():
                 self._log("⏹ 已停止")
