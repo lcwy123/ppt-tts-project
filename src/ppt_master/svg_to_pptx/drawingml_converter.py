@@ -408,7 +408,24 @@ def convert_svg_to_slide_shapes(
           semantic groups, in z-order; consumed by the builder's optional
           per-element entrance timing emitter.
     """
-    tree = ET.parse(str(svg_path))
+    try:
+        tree = ET.parse(str(svg_path))
+    except ET.ParseError as e:
+        # Show the problematic line for debugging
+        problem = ""
+        try:
+            with open(svg_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                m = __import__('re').search(r'line (\d+)', str(e))
+                if m:
+                    n = int(m.group(1))
+                    if 1 <= n <= len(lines):
+                        problem = f"\n  line {n}: {lines[n-1][:150].strip()}"
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"SVG XML format error in {svg_path.name}: {e}{problem}"
+        ) from e
     root = tree.getroot()
 
     # Expand <use data-icon="..."/> placeholders in-memory so this dispatcher
@@ -437,8 +454,10 @@ def convert_svg_to_slide_shapes(
     if unsupported:
         preview = '; '.join(unsupported[:8])
         suffix = '' if len(unsupported) <= 8 else f'; +{len(unsupported) - 8} more'
-        raise SvgNativeConversionError(
-            f'{svg_path.name}: unsupported visual SVG element(s): {preview}{suffix}'
+        import logging
+        logging.getLogger(__name__).warning(
+            '%s: unsupported visual SVG element(s), will be skipped: %s%s',
+            svg_path.name, preview, suffix,
         )
 
     defs = collect_defs(root)
@@ -455,7 +474,14 @@ def convert_svg_to_slide_shapes(
         tag = child.tag.replace(f'{{{SVG_NS}}}', '')
         if tag == 'defs':
             continue
-        result = convert_element(child, ctx)
+        try:
+            result = convert_element(child, ctx)
+        except SvgNativeConversionError:
+            import logging
+            logging.getLogger(__name__).warning(
+                '%s: skipping unsupported element <%s>', svg_path.name, tag,
+            )
+            result = None
         if result:
             shapes.append(result.xml)
             converted += 1

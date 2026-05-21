@@ -353,6 +353,7 @@ def build_slides_from_extracted(extracted_data: Dict) -> list:
             "title": block_title,
             "content": block_text,
             "images": block_images,  # 直接使用该块关联的图片
+            "tables": block.get("tables", []),
             "is_cover": False
         })
         page_num += 1

@@ -324,10 +324,28 @@ def ctx_h(val: float, ctx: ConvertContext) -> float:
 # ---------------------------------------------------------------------------
 
 def parse_hex_color(color_str: str) -> str | None:
-    """Parse '#RRGGBB' or '#RGB' to 'RRGGBB'. Returns None on failure."""
+    """Parse '#RRGGBB', '#RGB', 'rgb(r,g,b)', 'rgba(r,g,b,a)' to 'RRGGBB'.
+
+    Returns None on failure.
+    """
     if not color_str:
         return None
     color_str = color_str.strip()
+
+    # rgb(r, g, b) / rgba(r, g, b, a)
+    m = re.match(
+        r'rgba?\s*\(\s*(\d+%?)\s*,\s*(\d+%?)\s*,\s*(\d+%?)\s*(?:,\s*[\d.]+)?\s*\)',
+        color_str, re.IGNORECASE,
+    )
+    if m:
+        parts = []
+        for g in m.group(1, 2, 3):
+            v = g
+            if v.endswith('%'):
+                v = str(int(round(float(v[:-1]) / 100 * 255)))
+            parts.append(max(0, min(255, int(v))))
+        return ''.join(f'{c:02X}' for c in parts)
+
     if color_str.startswith('#'):
         color_str = color_str[1:]
     if len(color_str) == 3:

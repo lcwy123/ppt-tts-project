@@ -9,6 +9,7 @@ Two entry points:
 """
 
 import os
+import re
 import json
 import tempfile
 from pathlib import Path
@@ -123,6 +124,8 @@ def _svg_prompt_raw(slide_title, slide_content, page_num, total_pages,
         # Limit to max 6 images per slide to keep prompt manageable
         selected_images = images[:6]
         img_lines = []
+        # Compute stacked y positions for images (start at y=180, 24px gap)
+        img_y = 180
         for img_path in selected_images:
             w, h = _get_image_dimensions(img_path)
             if w and h:
@@ -130,17 +133,19 @@ def _svg_prompt_raw(slide_title, slide_content, page_num, total_pages,
                 scale = min(560 / w, 520 / h, 1.0)
                 sw, sh = int(w * scale), int(h * scale)
                 img_lines.append(
-                    f"  <image href='{img_path}' x='660' y='...' "
+                    f"  <image href='{img_path}' x='660' y='{img_y}' "
                     f"width='{sw}' height='{sh}' "
                     f"preserveAspectRatio='xMidYMid meet'/> "
-                    f"(natural {w}x{h}px, suggested render {sw}x{sh}px)"
+                    f"(natural {w}x{h}px)"
                 )
+                img_y += sh + 24
             else:
                 img_lines.append(
-                    f"  <image href='{img_path}' x='660' y='...' "
+                    f"  <image href='{img_path}' x='660' y='{img_y}' "
                     f"width='500' height='375' "
                     f"preserveAspectRatio='xMidYMid meet'/>"
                 )
+                img_y += 375 + 24
         image_block = f"""
 IMAGES TO INCLUDE ON THIS SLIDE:
 {chr(10).join(img_lines)}
@@ -275,6 +280,7 @@ def _call_llm_for_svg(prompt, progress_callback=None):
         "You are an expert PowerPoint designer. You write SVG code that converts "
         "directly to native PowerPoint shapes. Your output is clean, well-structured SVG "
         "with proper viewBox, semantic grouping, and professional typography. "
+        "CRITICAL: Your SVG MUST be valid XML. Escape all & as &amp; in text content. "
         "You output ONLY raw SVG code — no markdown fences, no explanation."
     )
 
@@ -314,11 +320,60 @@ def _call_llm_for_svg(prompt, progress_callback=None):
                 lines = lines[:-1]
             svg = "\n".join(lines).strip()
 
-        return svg if svg.startswith("<svg") else None
+        # Strip XML declaration if present (<?xml version="1.0"?>)
+        svg = re.sub(r'^<\?xml\b[^?]*\?>\s*', '', svg, flags=re.IGNORECASE).strip()
+
+        if not svg.startswith("<svg"):
+            return None
+
+        # Validate and repair XML well-formedness (LLM often forgets to escape &)
+        return _repair_svg_xml(svg, progress_callback)
 
     except Exception as e:
         if progress_callback:
             progress_callback(f"LLM call failed: {e}")
+        return None
+
+
+def _repair_svg_xml(svg_text, progress_callback=None):
+    """Fix common XML well-formedness issues in LLM-generated SVG.
+
+    Returns the repaired SVG string, or None if the SVG is beyond repair.
+    """
+    from xml.etree import ElementTree as ET
+
+    # Quick check: already well-formed?
+    try:
+        ET.fromstring(svg_text)
+        return svg_text
+    except ET.ParseError:
+        pass
+
+    # Step 1: remove control characters
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', svg_text)
+
+    # Step 2: fix unescaped & (not part of valid XML entities)
+    cleaned = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;|#x?[0-9a-fA-F]+;)', '&amp;', cleaned)
+
+    # Step 3: re-validate
+    try:
+        ET.fromstring(cleaned)
+        if progress_callback:
+            progress_callback("  ⚠ SVG XML 格式已自动修复（& 转义）")
+        return cleaned
+    except ET.ParseError as e:
+        if progress_callback:
+            progress_callback(f"  ⚠ SVG XML 修复后仍无效: {e}")
+        # Extract <svg>...</svg> fragment as last resort
+        m = re.search(r'<svg\b.*?</svg>', cleaned, re.DOTALL)
+        if m:
+            try:
+                ET.fromstring(m.group(0))
+                if progress_callback:
+                    progress_callback("  ✓ 已提取有效 SVG 片段")
+                return m.group(0)
+            except ET.ParseError:
+                pass
         return None
 
 
